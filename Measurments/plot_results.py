@@ -1,22 +1,19 @@
 # plot_results.py
 # -----------------------------------------------------------
-# Generate VLC assignment plots from result CSVs.
-# Expects files named like: "<distance>cm-<payload>B-results.csv"
-# Each CSV:
-#   Line 1: success_rate, throughput, mean_delay_s, std_delay_s, cl, cr
-#   Line 2+: per-packet delays (seconds)
-#
-# Outputs in ./plots:
-#  - throughput_vs_distance_<payload>B.png         (per payload)
-#  - rtt_vs_distance_<payload>B.png                (per payload; CI if given, else 1.96*sd/sqrt(n))
-#  - delay_cdf_<payload>B_<distance>cm.png         (per payload & distance)
-#  - throughput_vs_distance_ALL.png                (1B,100B,180B in one figure)
-#  - rtt_vs_distance_ALL.png                       (1B,100B,180B in one figure)
+# Report-ready VLC plots from result CSVs:
+#  - throughput_vs_distance_<payload>B.png        (per payload)
+#  - rtt_mean_vs_distance_<payload>B.png          (per payload; error bars = CI or 1.96*sd/sqrt(n))
+#  - rtt_std_vs_distance_<payload>B.png           (per payload)
+#  - throughput_vs_distance_ALL.png               (all payloads, all distances found)
+#  - rtt_mean_vs_distance_ALL.png                 (all payloads, with CI error bars)
+#  - rtt_std_vs_distance_ALL.png                  (all payloads)
+#  - rtt_boxplot_ALL.png                          (summary boxplot across distances per payload)
 #  - summary_metrics.csv
 #
-# Usage:
-#   Place all CSVs in ./results next to this script, then run:
-#       python plot_results.py
+# Expects files named: "<distance>cm-<payload>B-results.csv"
+# CSV format:
+#   Line 1: success_rate, throughput, mean_delay_s, std_delay_s, cl, cr
+#   Line 2+: per-packet RTTs (seconds). NaNs allowed (loss).
 # -----------------------------------------------------------
 
 import os
@@ -24,32 +21,32 @@ import re
 import csv
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 # ------------------ CONFIG (edit if needed) ------------------
-RESULTS_DIRS = ["./results", "."]   # searched in order
-DISTANCES_CM = [0, 1, 3, 5, 6, 7, 10]
-PAYLOADS_B   = [1, 100, 180]
-OUT_DIR      = Path("./plots")
+RESULTS_DIRS = ["./results", "."]   # directories to scan (recursive)
+PAYLOADS_B   = [1, 100, 180]        # payload sizes you used
+OUT_DIR      = Path("./plots")      # output directory
+CI_FALLBACK_Z = 1.96                # 95% CI fallback when cl/cr not provided
 # -------------------------------------------------------------
 
 
+# --------- helpers ---------
 def find_result_files() -> List[Path]:
-    """Find files matching '<d>cm-<p>B-results.csv' in RESULTS_DIRS."""
-    files: List[Path] = []
     pat = re.compile(r"^\s*(\d+)\s*cm-(\d+)\s*B-results\.csv$", re.IGNORECASE)
+    files: List[Path] = []
     for root in RESULTS_DIRS:
         p = Path(root)
         if not p.exists():
             continue
-        for f in p.glob("**/*-results.csv"):
+        for f in p.rglob("*-results.csv"):
             if pat.match(f.name):
                 files.append(f.resolve())
-    # Deduplicate & sort by payload, then distance
+    # unique + stable sort by payload then distance
     files = sorted(
         set(files),
         key=lambda x: (
@@ -68,10 +65,18 @@ def parse_filename(path: Path) -> Tuple[int, int]:
     return int(m1.group(1)), int(m2.group(1))
 
 
+def to_float(s: str) -> float:
+    try:
+        v = float(s)
+        return v
+    except Exception:
+        return float("nan")
+
+
 def parse_csv(path: Path):
     """
     First line: success_rate, throughput, mean_delay_s, std_delay_s, cl, cr
-    Subsequent lines: delays (seconds), any number per line.
+    Subsequent lines: RTT samples (seconds), may include 'nan' for lost packets.
     """
     with path.open("r", encoding="utf-8") as f:
         reader = csv.reader(f)
@@ -80,17 +85,10 @@ def parse_csv(path: Path):
     if not rows:
         raise ValueError(f"Empty CSV: {path}")
 
-    # Robust parse of first line
     first_line = ",".join(rows[0])
     parts = [x.strip() for x in first_line.split(",")]
     if len(parts) < 6:
         raise ValueError(f"Header row has fewer than 6 fields: {path}")
-
-    def to_float(s: str) -> float:
-        try:
-            return float(s)
-        except:
-            return float("nan")
 
     success_rate   = to_float(parts[0])
     throughput     = to_float(parts[1])
@@ -100,15 +98,14 @@ def parse_csv(path: Path):
     cr             = to_float(parts[5])
 
     delays: List[float] = []
-    if len(rows) > 1:
-        for r in rows[1:]:
-            for cell in r:
-                cell = cell.strip()
-                if cell != "":
-                    try:
-                        delays.append(float(cell))
-                    except:
-                        pass
+    for r in rows[1:]:
+        for cell in r:
+            cell = cell.strip()
+            if cell == "":
+                continue
+            v = to_float(cell)
+            # keep all numbers incl. NaN; we'll filter NaN/inf for stats
+            delays.append(v)
 
     return {
         "success_rate": success_rate,
@@ -121,14 +118,25 @@ def parse_csv(path: Path):
     }
 
 
-def ci_half_width_from_delays(delays_s: List[float]) -> float:
-    """Return 95% CI half-width (ms) using normal approx (1.96*sd/sqrt(n))."""
-    n = len(delays_s)
+def valid_numbers(vals: List[float]) -> List[float]:
+    out = []
+    for v in vals:
+        if v == v and math.isfinite(v):  # filters NaN and +/-inf
+            out.append(v)
+    return out
+
+
+def ci_half_width_from_delays(delays_s: List[float], z=CI_FALLBACK_Z) -> float:
+    """
+    Return 95% CI half-width (ms) using normal approx (z * sd / sqrt(n)).
+    """
+    xs = valid_numbers(delays_s)
+    n = len(xs)
     if n <= 1:
         return 0.0
-    arr = np.array(delays_s, dtype=float)
-    sd = float(np.std(arr, ddof=1))  # sample std
-    hw = 1.96 * sd / math.sqrt(n)
+    arr = np.array(xs, dtype=float)
+    sd = float(np.std(arr, ddof=1))
+    hw = z * sd / math.sqrt(n)
     return hw * 1000.0  # ms
 
 
@@ -137,26 +145,27 @@ def ensure_outdir():
 
 
 def ecdf(values: List[float]):
-    if len(values) == 0:
-        return np.array([]), np.array([])
     xs = np.sort(np.array(values, dtype=float))
     ys = np.arange(1, len(xs) + 1) / len(xs)
     return xs, ys
 
 
+# --------- main pipeline ---------
 def main():
     ensure_outdir()
     files = find_result_files()
 
-    # Load all
     rows_summary: List[dict] = []
     by_payload: Dict[int, List[dict]] = {p: [] for p in PAYLOADS_B}
+    distances_all: Set[int] = set()
 
     for file in files:
         dist_cm, payload_B = parse_filename(file)
-        if (dist_cm not in DISTANCES_CM) or (payload_B not in PAYLOADS_B):
+        if payload_B not in PAYLOADS_B:
             continue
         data = parse_csv(file)
+
+        distances_all.add(dist_cm)
 
         # Convert to ms for plotting
         mean_ms = data["mean_delay_s"] * 1000.0 if not math.isnan(data["mean_delay_s"]) else float("nan")
@@ -164,11 +173,19 @@ def main():
         cl_ms   = data["cl"]           * 1000.0 if not math.isnan(data["cl"])           else float("nan")
         cr_ms   = data["cr"]           * 1000.0 if not math.isnan(data["cr"])           else float("nan")
 
-        # CI half-width: prefer (cr - mean), else compute from raw delays
-        if not math.isnan(cl_ms) and not math.isnan(cr_ms) and not math.isnan(mean_ms):
+        # CI half-width for RTT mean: prefer (cr - mean), else compute from delays (ignoring NaNs)
+        if not math.isnan(mean_ms) and not math.isnan(cr_ms):
             ci_hw_ms = max(0.0, cr_ms - mean_ms)
         else:
             ci_hw_ms = ci_half_width_from_delays(data["delays"]) if data["delays"] else 0.0
+
+        # Std dev from header (ms); if missing, compute from raw
+        if math.isnan(std_ms) and data["delays"]:
+            xs = [d * 1000.0 for d in valid_numbers(data["delays"])]
+            if len(xs) > 1:
+                std_ms = float(np.std(np.array(xs), ddof=1))
+            elif len(xs) == 1:
+                std_ms = 0.0
 
         row = {
             "file": str(file),
@@ -179,110 +196,144 @@ def main():
             "mean_delay_ms": mean_ms,
             "std_delay_ms": std_ms,
             "ci_half_width_ms": ci_hw_ms,
-            "n_delays": len(data["delays"]),
+            "n_delays": len(valid_numbers(data["delays"])),
+            "delays_ms_list": [d * 1000.0 for d in valid_numbers(data["delays"])],
         }
         rows_summary.append(row)
-        by_payload[payload_B].append({**row, "delays_s": data["delays"]})
+        by_payload[payload_B].append(row)
+
+    # Distances used in plots = every distance we actually found (this includes 8 cm with throughput 0)
+    DISTANCES = sorted(distances_all)
 
     # Write summary CSV
     df = pd.DataFrame(rows_summary).sort_values(["payload_B", "distance_cm"]).reset_index(drop=True)
     df.to_csv(OUT_DIR / "summary_metrics.csv", index=False)
 
     # ---------- Per-payload plots ----------
-    # 1) Throughput vs Distance (per payload)
     for payload_B in PAYLOADS_B:
         rows = sorted(by_payload[payload_B], key=lambda r: r["distance_cm"])
         if not rows:
             continue
-        x = [r["distance_cm"] for r in rows]
-        y = [r["throughput"] for r in rows]
+
+        # Build aligned series for all observed distances
+        idx = {r["distance_cm"]: r for r in rows}
+        xs = DISTANCES
+        thr = [idx[d]["throughput"] if d in idx else np.nan for d in xs]
+        mean = [idx[d]["mean_delay_ms"] if d in idx else np.nan for d in xs]
+        stdv = [idx[d]["std_delay_ms"] if d in idx else np.nan for d in xs]
+        ci   = [idx[d]["ci_half_width_ms"] if d in idx else 0.0 for d in xs]
+
+        # Throughput vs distance (per payload)
         plt.figure()
-        plt.plot(x, y, marker="o")
+        plt.plot(xs, thr, marker="o")
         plt.xlabel("Distance (cm)")
         plt.ylabel("Throughput")
         plt.title(f"Throughput vs Distance — payload {payload_B} B")
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(OUT_DIR / f"throughput_vs_distance_{payload_B}B.png", dpi=150)
         plt.close()
 
-    # 2) Mean RTT vs Distance with error bars (per payload)
-    for payload_B in PAYLOADS_B:
-        rows = sorted(by_payload[payload_B], key=lambda r: r["distance_cm"])
-        if not rows:
-            continue
-        x = [r["distance_cm"] for r in rows]
-        y = [r["mean_delay_ms"] for r in rows]
-        yerr = []
-        for r in rows:
-            hw = r["ci_half_width_ms"]
-            if (math.isnan(hw) or hw == 0.0) and r["n_delays"] > 1 and not math.isnan(r["std_delay_ms"]):
-                hw = 1.96 * (r["std_delay_ms"] / math.sqrt(r["n_delays"]))
-            if math.isnan(hw):
-                hw = 0.0
-            yerr.append(hw)
+        # Mean RTT vs distance with error bars (per payload)
         plt.figure()
-        plt.errorbar(x, y, yerr=yerr, fmt="o-", capsize=3)
+        plt.errorbar(xs, mean, yerr=ci, fmt="o-", capsize=3)
         plt.xlabel("Distance (cm)")
         plt.ylabel("Mean RTT (ms)")
         plt.title(f"Mean RTT vs Distance — payload {payload_B} B")
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(OUT_DIR / f"rtt_vs_distance_{payload_B}B.png", dpi=150)
+        plt.savefig(OUT_DIR / f"rtt_mean_vs_distance_{payload_B}B.png", dpi=150)
         plt.close()
 
-    # 3) Delay CDFs for each (payload, distance)
-    for payload_B in PAYLOADS_B:
-        rows = sorted(by_payload[payload_B], key=lambda r: r["distance_cm"])
-        for r in rows:
-            delays_ms = [d * 1000.0 for d in r.get("delays_s", [])]
-            if len(delays_ms) == 0:
-                continue
-            xs, ys = ecdf(delays_ms)
-            plt.figure()
-            plt.plot(xs, ys)
-            plt.xlabel("RTT (ms)")
-            plt.ylabel("CDF")
-            plt.title(f"Delay CDF — payload {payload_B} B, {r['distance_cm']} cm")
-            plt.tight_layout()
-            plt.savefig(OUT_DIR / f"delay_cdf_{payload_B}B_{r['distance_cm']}cm.png", dpi=150)
-            plt.close()
+        # Std RTT vs distance (per payload)
+        plt.figure()
+        plt.plot(xs, stdv, marker="o")
+        plt.xlabel("Distance (cm)")
+        plt.ylabel("RTT Std Dev (ms)")
+        plt.title(f"RTT Standard Deviation vs Distance — payload {payload_B} B")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(OUT_DIR / f"rtt_std_vs_distance_{payload_B}B.png", dpi=150)
+        plt.close()
 
-    # ---------- Combined plots (all payloads on one figure) ----------
-    # Helper: build vectors aligned to DISTANCES_CM (NaN for missing points)
-    def series_for_payload(metric_key: str, payload_B: int):
+    # ---------- Combined plots (all payloads) ----------
+    def series(payload_B: int, key: str):
         rows = {r["distance_cm"]: r for r in by_payload[payload_B]}
-        xs = []
-        ys = []
-        for d in DISTANCES_CM:
-            xs.append(d)
-            val = rows[d][metric_key] if d in rows else float("nan")
-            ys.append(val)
-        return xs, ys
+        y = [rows[d][key] if d in rows else np.nan for d in DISTANCES]
+        return DISTANCES, y
 
-    # Combined Throughput
+    # Combined Throughput (include zeros and gaps)
     plt.figure()
     for payload_B in PAYLOADS_B:
-        x, y = series_for_payload("throughput", payload_B)
+        x, y = series(payload_B, "throughput")
         plt.plot(x, y, marker="o", label=f"{payload_B} B")
     plt.xlabel("Distance (cm)")
     plt.ylabel("Throughput")
     plt.title("Throughput vs Distance — all payloads")
+    plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
     plt.savefig(OUT_DIR / "throughput_vs_distance_ALL.png", dpi=150)
     plt.close()
 
-    # Combined Mean RTT
+    # Combined Mean RTT with CI error bars
     plt.figure()
     for payload_B in PAYLOADS_B:
-        x, y = series_for_payload("mean_delay_ms", payload_B)
-        plt.plot(x, y, marker="o", label=f"{payload_B} B")
+        rows = {r["distance_cm"]: r for r in by_payload[payload_B]}
+        y  = [rows[d]["mean_delay_ms"] if d in rows else np.nan for d in DISTANCES]
+        ye = [rows[d]["ci_half_width_ms"] if d in rows else 0.0 for d in DISTANCES]
+        plt.errorbar(DISTANCES, y, yerr=ye, fmt="o-", capsize=3, label=f"{payload_B} B")
     plt.xlabel("Distance (cm)")
     plt.ylabel("Mean RTT (ms)")
-    plt.title("Mean RTT vs Distance — all payloads")
+    plt.title("Mean RTT vs Distance — all payloads (with CI)")
+    plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(OUT_DIR / "rtt_vs_distance_ALL.png", dpi=150)
+    plt.savefig(OUT_DIR / "rtt_mean_vs_distance_ALL.png", dpi=150)
     plt.close()
+
+    # Combined Std RTT
+    plt.figure()
+    for payload_B in PAYLOADS_B:
+        x, y = series(payload_B, "std_delay_ms")
+        plt.plot(x, y, marker="o", label=f"{payload_B} B")
+    plt.xlabel("Distance (cm)")
+    plt.ylabel("RTT Std Dev (ms)")
+    plt.title("RTT Standard Deviation vs Distance — all payloads")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUT_DIR / "rtt_std_vs_distance_ALL.png", dpi=150)
+    plt.close()
+
+    # ---------- Concise distribution view (boxplot) ----------
+    # One figure: three groups (payloads). Each group shows RTT distributions across distances (labels like '1B@0','1B@1',...)
+    labels = []
+    data   = []
+    for payload_B in PAYLOADS_B:
+        for d in DISTANCES:
+            recs = [r for r in by_payload[payload_B] if r["distance_cm"] == d]
+            if not recs:
+                continue
+            # concatenate RTTs (ms) for that (payload, distance)
+            samples = []
+            for r in recs:
+                samples.extend(r["delays_ms_list"])
+            if len(samples) == 0:
+                continue
+            labels.append(f"{payload_B}B@{d}")
+            data.append(samples)
+
+    if data:
+        plt.figure(figsize=(max(8, len(labels) * 0.6), 5))
+        plt.boxplot(data, showmeans=True)
+        plt.xticks(range(1, len(labels) + 1), labels, rotation=45, ha="right")
+        plt.ylabel("RTT (ms)")
+        plt.title("RTT distribution summary (boxplot)")
+        plt.grid(True, axis="y", alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(OUT_DIR / "rtt_boxplot_ALL.png", dpi=150)
+        plt.close()
 
 
 if __name__ == "__main__":
