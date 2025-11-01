@@ -1,0 +1,19 @@
+file,distance_cm,payload_B,success_rate,throughput,mean_delay_ms,std_delay_ms,ci_half_width_ms,n_delays
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\0cm-1B-results.csv,0,1,1.0,3.8984274601279885,212.12883666666661,5.093998202650763,2.2897600640403653,30
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\1cm-1B-results.csv,1,1,1.0,3.91058530134299,211.78743333333333,5.273174719296707,2.3703001851609997,30
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\3cm-1B-results.csv,3,1,1.0,3.897604423188584,212.83243666666667,4.967554431576787,2.2329233935442687,30
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\5cm-1B-results.csv,5,1,1.0,3.902821919777808,212.39485999999997,4.527903788547722,2.0352997500938557,30
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\6cm-1B-results.csv,6,1,1.0,3.916110388625005,211.25811000000002,5.584148470963019,2.510083367094552,30
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\7cm-1B-results.csv,7,1,0.7,0.1880591933397558,633.3430714285715,437.379127106525,519.5263656369822,10
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\0cm-100B-results.csv,0,100,1.0,84.25869719364675,1138.7238074074073,3.8971418143918597,1.8589854842796285,27
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\1cm-100B-results.csv,1,100,1.0,84.12977642443366,1141.3351814814816,4.583473553979406,2.1863743251428787,27
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\3cm-100B-results.csv,3,100,1.0,84.1944410745013,1139.8621666666666,4.378520087180849,2.088608953011999,27
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\5cm-100B-results.csv,5,100,1.0,84.15851169649333,1140.6294925925927,4.230082222416549,2.017802231302312,27
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\6cm-100B-results.csv,6,100,1.0,83.98243957049004,1142.6450814814812,4.7242270365749075,2.253515500257663,27
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\7cm-100B-results.csv,7,100,0.6,9.347397689624279,3585.6138333333333,2407.272582109324,9679.61586329982,5
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\0cm-180B-results.csv,0,180,1.0,96.49797252714075,1796.4053588235292,4.203279339702918,2.6337230467131576,17
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\1cm-180B-results.csv,1,180,1.0,96.32715300103514,1799.4794235294116,5.862598588353275,3.673432043863613,17
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\3cm-180B-results.csv,3,180,1.0,96.08293758597755,1803.5007588235294,4.576637710571335,2.8676648018451942,17
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\5cm-180B-results.csv,5,180,1.0,96.18669573600448,1801.7719352941176,5.301231056431737,3.321686064829464,17
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\6cm-180B-results.csv,6,180,1.0,96.01057215708907,1805.285023529412,6.048404595379806,3.789855798597273,17
+C:\Users\Sven\OneDrive\Dokumente\ETH\5. Semester\WNMC\Assignment5\improved_step5\results\7cm-180B-results.csv,7,180,0.5,13.32346883439307,2426.4060999999997,1017.6569620501989,4091.987150299067,6
